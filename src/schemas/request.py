@@ -27,6 +27,7 @@ class OpenAIChatRequest(BaseModel):
     stream: Optional[bool] = False
     tools: Optional[List[dict]] = None
     tool_choice: Optional[Any] = None
+    user: Optional[str] = Field(default=None, description="The session or user ID from llxprt.")
 
 class Part(BaseModel):
     text: Optional[str] = None
