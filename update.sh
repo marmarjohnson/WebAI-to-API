@@ -5,8 +5,15 @@ cd "$(dirname "$0")"
 PID_FILE="/tmp/webai-to-api.pid"
 LOG_FILE="/tmp/webai-to-api.log"
 
-# --- Stop Command ---
-if [[ "$1" == "--stop" ]]; then
+# --- Handle Restart/Stop logic ---
+if [[ "$1" == "--restart" ]]; then
+    echo "--> Restarting WebAI-to-API..."
+    # Call stop command and wait
+    "$0" --stop
+    sleep 1
+    # Clear arguments so we fall through to the start logic below instead of looping
+    set -- 
+elif [[ "$1" == "--stop" ]]; then
     if [[ -f "$PID_FILE" ]]; then
         PID=$(cat "$PID_FILE")
         if kill -0 "$PID" 2>/dev/null; then
@@ -55,7 +62,6 @@ echo "--> Checking for repository updates..."
 git pull
 
 # 2. Sync the virtual environment
-# 'poetry install' checks pyproject.toml and only installs new/updated packages
 echo "--> Syncing dependencies..."
 poetry install --sync
 

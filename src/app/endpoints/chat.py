@@ -6,7 +6,7 @@ from fastapi import APIRouter, HTTPException
 from app.logger import logger
 from schemas.request import GeminiRequest, OpenAIChatRequest
 from app.services.gemini_client import get_gemini_client, GeminiClientNotInitializedError
-from app.services.session_manager import get_translate_session_manager
+from app.services.session_manager import get_translate_session_manager, get_gemini_chat_manager
 
 router = APIRouter()
 
@@ -138,9 +138,43 @@ async def chat_completions(request: OpenAIChatRequest):
     if not request.messages:
         raise HTTPException(status_code=400, detail="No messages provided.")
 
+    if not request.model:
+        raise HTTPException(status_code=400, detail="Model not specified in the request.")
+
+    # Session persistence path: when a user/session ID is provided, use the session manager
+    # so Gemini retains conversation history on its side. Only the latest user message is sent.
+    if request.user:
+        session_manager = get_gemini_chat_manager()
+        if not session_manager:
+            raise HTTPException(status_code=503, detail="Session manager is not initialized.")
+
+        # Extract the last user message — that's the new turn; history lives in the session
+        last_user_content = next(
+            (msg.get("content", "") for msg in reversed(request.messages) if msg.get("role") == "user"),
+            None,
+        )
+        if not last_user_content:
+            raise HTTPException(status_code=400, detail="No user message found.")
+
+        prompt = last_user_content
+        if request.tools:
+            tools_prompt = _build_tools_prompt(request.tools)
+            if tools_prompt:
+                prompt = f"{tools_prompt}\n\n{prompt}"
+
+        try:
+            response = await session_manager.get_response(request.model, prompt, session_id=request.user)
+            logger.debug(f"Gemini session response: {response.text!r}")
+            tool_call = _parse_tool_call(response.text) if request.tools else None
+            logger.debug(f"Parsed tool_call: {tool_call}")
+            return convert_to_openai_format(response.text, request.model, is_stream, tool_call)
+        except Exception as e:
+            logger.error(f"Error in /v1/chat/completions session endpoint: {e}", exc_info=True)
+            raise HTTPException(status_code=500, detail=f"Error processing chat completion: {str(e)}")
+
+    # Stateless path: reconstruct full conversation history as a single prompt
     conversation_parts = []
 
-    # Inject tool definitions as a system prompt section
     if request.tools:
         tools_prompt = _build_tools_prompt(request.tools)
         if tools_prompt:
@@ -172,9 +206,6 @@ async def chat_completions(request: OpenAIChatRequest):
         raise HTTPException(status_code=400, detail="No valid messages found.")
 
     final_prompt = "\n\n".join(conversation_parts)
-
-    if not request.model:
-        raise HTTPException(status_code=400, detail="Model not specified in the request.")
 
     try:
         response = await gemini_client.generate_content(message=final_prompt, model=request.model, files=None)

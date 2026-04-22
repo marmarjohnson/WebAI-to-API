@@ -11,9 +11,9 @@ class MyGeminiClient:
     def __init__(self, secure_1psid: str, secure_1psidts: str, proxy: str | None = None) -> None:
         self.client = WebGeminiClient(secure_1psid, secure_1psidts, proxy)
 
-    async def init(self) -> None:
+    async def init(self, **kwargs) -> None:
         """Initialize the Gemini client."""
-        await self.client.init()
+        await self.client.init(**kwargs)
     async def generate_content(self, message: str, model: str, files: Optional[List[Union[str, Path]]] = None):
         """
         Generate content using the Gemini client.

@@ -1,4 +1,5 @@
 # src/app/endpoints/google_generative.py
+import hashlib
 import json
 from typing import Optional
 from fastapi import APIRouter, HTTPException
@@ -6,6 +7,7 @@ from fastapi.responses import StreamingResponse
 from app.logger import logger
 from schemas.request import GoogleGenerativeRequest
 from app.services.gemini_client import get_gemini_client, GeminiClientNotInitializedError
+from app.services.session_manager import get_gemini_chat_manager
 
 router = APIRouter()
 
@@ -42,6 +44,24 @@ def _parse_function_call(text: str) -> Optional[dict]:
                     return obj["functionCall"]
             except (json.JSONDecodeError, ValueError):
                 pass
+    return None
+
+
+def _session_id_from_contents(contents) -> Optional[str]:
+    """Derive a stable session ID from the first user message text."""
+    for content in contents:
+        if (content.role or "user") == "user":
+            text = " ".join(p.text or "" for p in content.parts if p.text).strip()
+            if text:
+                return hashlib.md5(text.encode()).hexdigest()[:16]
+    return None
+
+
+def _last_user_message(contents) -> Optional[str]:
+    """Extract the text of the last user turn."""
+    for content in reversed(contents):
+        if (content.role or "user") == "user":
+            return " ".join(p.text or "" for p in content.parts if p.text).strip() or None
     return None
 
 
@@ -111,28 +131,40 @@ async def google_generative_generate(model_path: str, request: GoogleGenerativeR
     is_streaming = action == "streamGenerateContent"
 
     try:
-        prompt_parts = []
+        session_id = _session_id_from_contents(request.contents)
+        last_user_msg = _last_user_message(request.contents)
 
-        # Inject system instruction if present
+        if not last_user_msg:
+            raise HTTPException(status_code=400, detail="No user message found in contents.")
+
+        # Build any prefix (system instruction + tool defs) to prepend to the message
+        prefix_parts = []
         if request.systemInstruction:
             if isinstance(request.systemInstruction, str):
-                prompt_parts.append(f"System: {request.systemInstruction}")
+                prefix_parts.append(f"System: {request.systemInstruction}")
             elif isinstance(request.systemInstruction, dict):
                 for p in request.systemInstruction.get("parts", []):
                     if isinstance(p, dict) and p.get("text"):
-                        prompt_parts.append(f"System: {p['text']}")
-
-        # Inject tool definitions as system prompt
+                        prefix_parts.append(f"System: {p['text']}")
         if request.tools:
             tools_prompt = _build_tools_prompt(request.tools)
             if tools_prompt:
-                prompt_parts.append(tools_prompt)
+                prefix_parts.append(tools_prompt)
 
-        # Build conversation text
-        prompt_parts.append(_build_prompt_from_contents(request.contents))
-        prompt = "\n\n".join(p for p in prompt_parts if p)
+        # Use session manager for multi-turn persistence; session_id derived from first user message
+        if session_id:
+            session_manager = get_gemini_chat_manager()
+            if not session_manager:
+                raise HTTPException(status_code=503, detail="Session manager is not initialized.")
+            prompt = "\n\n".join(prefix_parts + [last_user_msg]) if prefix_parts else last_user_msg
+            logger.debug(f"Using session {session_id} for /v1beta request")
+            response = await session_manager.get_response(model_name, prompt, session_id=session_id)
+        else:
+            # Fallback: stateless full-history prompt
+            prompt_parts = prefix_parts + [_build_prompt_from_contents(request.contents)]
+            prompt = "\n\n".join(p for p in prompt_parts if p)
+            response = await gemini_client.generate_content(prompt, model_name)
 
-        response = await gemini_client.generate_content(prompt, model_name)
         google_response = _make_google_response(response.text, request.tools)
 
         if is_streaming:
@@ -142,6 +174,8 @@ async def google_generative_generate(model_path: str, request: GoogleGenerativeR
 
         return google_response
 
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"Error in /v1beta/models endpoint: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=f"Error generating content: {str(e)}")

@@ -1,0 +1,17 @@
+# Project Context: WebAI-to-API
+
+## System Environment
+- **OS:** Ubuntu 24.04 (WSL)
+- **Runtime:** Python
+- **Containerization:** Docker / Docker Compose
+- **Build System:** Makefile
+- **Dependency Management:** Poetry (`pyproject.toml`, `poetry.lock`) / `requirements.txt`
+
+## Project Structure Overview
+- `src/`: Core source code
+- `config.conf`: Active configuration
+- `assets/`: Static assets or resources
+
+## Ongoing Tasks
+- [ ] Explore `src` directory logic
+- [ ] Verify Docker/Makefile execution flow
