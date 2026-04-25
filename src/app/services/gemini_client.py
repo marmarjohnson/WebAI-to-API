@@ -34,7 +34,7 @@ async def init_gemini_client() -> bool:
             if not gemini_cookie_1PSID or not gemini_cookie_1PSIDTS:
                 cookies = get_cookie_from_browser("gemini")
                 if cookies:
-                    gemini_cookie_1PSID, gemini_cookie_1PSIDTS = cookies
+                    gemini_cookie_1PSID, gemini_cookie_1PSIDTS, *_ = cookies
 
             if gemini_proxy == "":
                 gemini_proxy = None
@@ -68,6 +68,13 @@ async def init_gemini_client() -> bool:
         logger.info(error_msg)
         _initialization_error = error_msg
         return False
+
+
+def reset_gemini_client():
+    """Reset the global client so a subprocess can reinitialize with its own event loop."""
+    global _gemini_client, _initialization_error
+    _gemini_client = None
+    _initialization_error = None
 
 
 def get_gemini_client():

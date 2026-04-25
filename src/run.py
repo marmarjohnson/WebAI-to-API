@@ -29,7 +29,7 @@ except ImportError:
 # --- App and Service Imports ---
 from app.config import load_config
 from app.main import app as webai_app
-from app.services.gemini_client import init_gemini_client
+from app.services.gemini_client import init_gemini_client, reset_gemini_client
 
 # Conditionally import g4f runner function
 try:
@@ -221,6 +221,9 @@ if __name__ == "__main__":
 
     print("INFO:     Checking availability of server modes...")
     webai_is_available = asyncio.run(init_gemini_client())
+    # Reset so the subprocess reinitializes with its own event loop (avoids
+    # "Future attached to a different loop" when auto_refresh tasks are forked)
+    reset_gemini_client()
     if webai_is_available:
         print(
             f"INFO:     ✅ {Colors.CYAN}WebAI-to-API mode is available{Colors.RESET} (Gemini client initialized)."

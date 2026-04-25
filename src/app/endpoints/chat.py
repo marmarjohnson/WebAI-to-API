@@ -21,7 +21,7 @@ async def translate_chat(request: GeminiRequest):
     if not session_manager:
         raise HTTPException(status_code=503, detail="Session manager is not initialized.")
     try:
-        response = await session_manager.get_response(request.model, request.message, request.files)
+        response = await session_manager.get_response(request.model, request.message, images=request.files or None)
         return {"response": response.text}
     except Exception as e:
         logger.error(f"Error in /translate endpoint: {e}", exc_info=True)

@@ -382,10 +382,11 @@ def get_cookie_from_browser(service: Literal["gemini"]) -> Optional[tuple]:
     
     # Process cookies for the requested service
     if service == "gemini":
-        logger.info("Looking for Gemini cookies (__Secure-1PSID and __Secure-1PSIDTS)...")
+        logger.info("Looking for Gemini cookies (__Secure-1PSID, __Secure-1PSIDTS, __Secure-1PSIDCC)...")
         secure_1psid = None
         secure_1psidts = None
-        
+        secure_1psidcc = None
+
         try:
             for cookie in cookies:
                 if hasattr(cookie, 'name') and hasattr(cookie, 'value') and hasattr(cookie, 'domain'):
@@ -395,18 +396,20 @@ def get_cookie_from_browser(service: Literal["gemini"]) -> Optional[tuple]:
                     elif cookie.name == "__Secure-1PSIDTS" and "google" in cookie.domain:
                         secure_1psidts = cookie.value
                         logger.info(f"Found __Secure-1PSIDTS: {secure_1psidts[:20]}..." if secure_1psidts else "Found __Secure-1PSIDTS (empty value)")
+                    elif cookie.name == "__Secure-1PSIDCC" and "google" in cookie.domain:
+                        secure_1psidcc = cookie.value
+                        logger.info(f"Found __Secure-1PSIDCC: {secure_1psidcc[:20]}..." if secure_1psidcc else "Found __Secure-1PSIDCC (empty value)")
         except Exception as e:
             logger.error(f"Error processing cookies: {e}")
             return None
-        
+
         if secure_1psid and secure_1psidts:
-            # Check if values are not empty (they might be encrypted on Windows)
             if len(secure_1psid.strip()) == 0 or len(secure_1psidts.strip()) == 0:
                 logger.warning("Gemini cookies found but appear to be empty (possibly encrypted). Manual cookie extraction may be required on Windows.")
                 return None
-            
+
             logger.info("Both Gemini cookies found and appear valid.")
-            return secure_1psid, secure_1psidts
+            return secure_1psid, secure_1psidts, secure_1psidcc
         else:
             logger.warning("Gemini cookies not found or incomplete.")
             return None

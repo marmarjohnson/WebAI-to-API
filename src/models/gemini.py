@@ -12,20 +12,13 @@ class MyGeminiClient:
         self.client = WebGeminiClient(secure_1psid, secure_1psidts, proxy)
 
     async def init(self, **kwargs) -> None:
-        """Initialize the Gemini client."""
         await self.client.init(**kwargs)
+
     async def generate_content(self, message: str, model: str, files: Optional[List[Union[str, Path]]] = None):
-        """
-        Generate content using the Gemini client.
-        """
         return await self.client.generate_content(message, model=model, files=files)
 
     async def close(self) -> None:
-        """Close the Gemini client."""
         await self.client.close()
 
     def start_chat(self, model: str):
-        """
-        Start a chat session with the given model.
-        """
         return self.client.start_chat(model=model)
