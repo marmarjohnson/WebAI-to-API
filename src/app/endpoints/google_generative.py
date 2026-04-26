@@ -58,10 +58,21 @@ def _session_id_from_contents(contents) -> Optional[str]:
 
 
 def _last_user_message(contents) -> Optional[str]:
-    """Extract the text of the last user turn."""
+    """Extract the text of the last user turn, converting tool responses to text if needed."""
     for content in reversed(contents):
         if (content.role or "user") == "user":
-            return " ".join(p.text or "" for p in content.parts if p.text).strip() or None
+            text_parts = [p.text for p in content.parts if p.text]
+            if text_parts:
+                return " ".join(text_parts).strip() or None
+            # No text — last turn is a tool response; convert to text so the session can continue
+            fr_parts = [p.functionResponse for p in content.parts if p.functionResponse]
+            if fr_parts:
+                lines = []
+                for fr in fr_parts:
+                    name = fr.get("name", "tool")
+                    response = fr.get("response", {})
+                    lines.append(f"Tool result for {name}: {json.dumps(response)}")
+                return "\n".join(lines)
     return None
 
 
@@ -133,6 +144,12 @@ async def google_generative_generate(model_path: str, request: GoogleGenerativeR
     try:
         session_id = _session_id_from_contents(request.contents)
         last_user_msg = _last_user_message(request.contents)
+        first_user_text = next(
+            (" ".join(p.text or "" for p in c.parts if p.text).strip()
+             for c in request.contents if (c.role or "user") == "user"),
+            ""
+        )
+        logger.info(f"Session ID: {session_id}, turns: {len(request.contents)}, first user msg: {repr(first_user_text[:80])}")
 
         if not last_user_msg:
             raise HTTPException(status_code=400, detail="No user message found in contents.")
