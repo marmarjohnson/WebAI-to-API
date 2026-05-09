@@ -30,7 +30,61 @@ class CrossPlatformCookieExtractor:
     def __init__(self):
         self.system = platform.system().lower()
         self.is_windows = self.system == "windows"
-        logger.info(f"Initialized cookie extractor for {self.system}")
+        self.is_wsl = self._detect_wsl()
+        logger.info(f"Initialized cookie extractor for {self.system} (wsl={self.is_wsl})")
+
+    @staticmethod
+    def _detect_wsl() -> bool:
+        try:
+            with open('/proc/version', 'r') as f:
+                return 'microsoft' in f.read().lower()
+        except Exception:
+            return False
+
+    def _get_wsl_firefox_profile(self) -> Optional[str]:
+        """Find the default Windows Firefox profile path accessible from WSL."""
+        import configparser
+
+        # Try USERPROFILE env var (sometimes set in WSL)
+        candidates = []
+        win_userprofile = os.environ.get('USERPROFILE', '')
+        if win_userprofile:
+            drive = win_userprofile[0].lower()
+            rest = win_userprofile[2:].replace('\\', '/')
+            candidates.append(f'/mnt/{drive}{rest}')
+
+        # Scan /mnt/c/Users/ as fallback
+        skip = {'All Users', 'Default', 'Default User', 'Public', 'WsiAccount'}
+        users_dir = '/mnt/c/Users'
+        if os.path.isdir(users_dir):
+            for user in os.listdir(users_dir):
+                if user not in skip and not user.startswith('.'):
+                    candidates.append(os.path.join(users_dir, user))
+
+        for home in candidates:
+            profiles_dir = os.path.join(home, 'AppData', 'Roaming', 'Mozilla', 'Firefox', 'Profiles')
+            if not os.path.isdir(profiles_dir):
+                continue
+            # Prefer the profile marked Default=1 in profiles.ini
+            ini_path = os.path.join(os.path.dirname(profiles_dir), 'profiles.ini')
+            if os.path.exists(ini_path):
+                cp = configparser.ConfigParser()
+                cp.read(ini_path)
+                for section in cp.sections():
+                    if cp.get(section, 'Default', fallback=None) == '1':
+                        rel = cp.get(section, 'Path', fallback=None)
+                        if rel:
+                            p = os.path.join(profiles_dir, rel) if cp.get(section, 'IsRelative', fallback='0') == '1' else rel
+                            db = os.path.join(p, 'cookies.sqlite')
+                            if os.path.exists(db):
+                                return db
+            # Fall back to first *default-release* profile
+            for name in sorted(os.listdir(profiles_dir)):
+                if 'default-release' in name:
+                    db = os.path.join(profiles_dir, name, 'cookies.sqlite')
+                    if os.path.exists(db):
+                        return db
+        return None
     
     def _get_browser_profile_paths(self, browser_name: str) -> Dict[str, Any]:
         """Get browser profile paths for different operating systems"""
@@ -191,57 +245,49 @@ class CrossPlatformCookieExtractor:
             result = decrypted.decode('utf-8')
             logger.info(f"AES-GCM decryption successful, result length: {len(result)}")
             return result
-            
+
         except Exception as e:
             logger.error(f"Failed to decrypt Chrome cookie: {e}", exc_info=True)
             return None
-        """Direct Firefox cookie extraction from SQLite database"""
+
+    def _get_firefox_cookies_direct(self, cookies_db_path: str) -> Optional[list]:
+        """Direct Firefox cookie extraction from SQLite database."""
+        import tempfile
+        import shutil
+
         try:
             if not os.path.exists(cookies_db_path):
                 logger.warning(f"Firefox cookies database not found: {cookies_db_path}")
                 return None
-            
-            # Copy the database to avoid lock issues
-            import tempfile
-            import shutil
-            
-            with tempfile.NamedTemporaryFile(suffix='.sqlite', delete=False) as temp_file:
-                temp_db_path = temp_file.name
-                shutil.copy2(cookies_db_path, temp_db_path)
-            
+
+            with tempfile.NamedTemporaryFile(suffix='.sqlite', delete=False) as tmp:
+                temp_db_path = tmp.name
+            shutil.copy2(cookies_db_path, temp_db_path)
+
             try:
                 conn = sqlite3.connect(temp_db_path)
                 cursor = conn.cursor()
-                
-                # Firefox cookie table structure
                 cursor.execute("""
-                    SELECT name, value, host, path, expiry, isSecure, isHttpOnly 
-                    FROM moz_cookies 
-                    WHERE host LIKE '%google%' AND (name = '__Secure-1PSID' OR name = '__Secure-1PSIDTS')
+                    SELECT name, value, host, path, expiry, isSecure, isHttpOnly
+                    FROM moz_cookies
+                    WHERE host LIKE '%google%'
+                      AND (name = '__Secure-1PSID' OR name = '__Secure-1PSIDTS' OR name = '__Secure-1PSIDCC')
                 """)
-                
                 cookies = []
                 for row in cursor.fetchall():
-                    cookie_obj = type('Cookie', (), {
-                        'name': row[0],
-                        'value': row[1],
-                        'domain': row[2],
-                        'path': row[3],
-                        'expires': row[4],
-                        'secure': bool(row[5]),
-                        'httponly': bool(row[6])
-                    })()
-                    cookies.append(cookie_obj)
-                
+                    cookies.append(type('Cookie', (), {
+                        'name': row[0], 'value': row[1], 'domain': row[2],
+                        'path': row[3], 'expires': row[4],
+                        'secure': bool(row[5]), 'httponly': bool(row[6]),
+                    })())
                 conn.close()
-                return cookies
+                return cookies or None
             finally:
-                # Clean up temp file
                 try:
                     os.unlink(temp_db_path)
-                except:
+                except Exception:
                     pass
-                    
+
         except Exception as e:
             logger.error(f"Failed to extract Firefox cookies directly: {e}")
             return None
@@ -325,14 +371,27 @@ class CrossPlatformCookieExtractor:
     def get_cookies_with_fallback(self, browser_name: str) -> Optional[Any]:
         """Get cookies with multiple fallback methods"""
         logger.info(f"Attempting to get cookies from {browser_name} with fallback methods")
-        
-        # Method 1: Try browser_cookie3 first (works well on Linux)
+
+        # Method 1: Try browser_cookie3 first (works well on native Linux)
         cookies = self._try_browser_cookie3(browser_name)
         if cookies:
             logger.info(f"Successfully retrieved cookies using browser_cookie3 for {browser_name}")
             return cookies
-        
-        # Method 2: Try direct database access (fallback for Windows)
+
+        # Method 2: WSL — read directly from Windows Firefox profile
+        if self.is_wsl and browser_name == "firefox":
+            logger.info("WSL detected: trying Windows Firefox profile")
+            db_path = self._get_wsl_firefox_profile()
+            if db_path:
+                logger.info(f"Found Windows Firefox cookies DB: {db_path}")
+                cookies = self._get_firefox_cookies_direct(db_path)
+                if cookies:
+                    logger.info("Successfully retrieved Firefox cookies via WSL Windows profile")
+                    return cookies
+            else:
+                logger.warning("Could not locate Windows Firefox profile from WSL")
+
+        # Method 3: Try direct database access (fallback for Windows)
         if self.is_windows:
             logger.info(f"Trying direct database access for {browser_name} on Windows")
             

@@ -51,7 +51,7 @@ if [[ -f "$PID_FILE" ]]; then
     PID=$(cat "$PID_FILE")
     if kill -0 "$PID" 2>/dev/null; then
         echo "--> WebAI-to-API is already running (PID $PID)."
-        echo "--> Run '$0 --stop' to stop it first, or check logs at $LOG_FILE"
+        echo "--> Run '$0 --restart' to restart it, '$0 --stop' to stop it, or check logs at $LOG_FILE"
         exit 1
     else
         echo "--> Stale PID file found. Cleaning up..."
