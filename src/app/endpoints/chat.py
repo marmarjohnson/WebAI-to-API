@@ -212,50 +212,90 @@ async def chat_completions(request: OpenAIChatRequest):
             logger.error(f"Error in /v1/chat/completions session endpoint: {e}", exc_info=True)
             raise HTTPException(status_code=500, detail=f"Error processing chat completion: {str(e)}")
 
-    # Stateless path: reconstruct full conversation history as a single prompt
-    conversation_parts = []
+    # Stateless path: use fingerprint-based session reuse so a single Gemini WebUI
+    # session handles all turns of the same conversation (avoids spawning a new session per turn).
+    session_manager = get_gemini_chat_manager()
+    msg_count = len(request.messages)
+    key = _session_key(request.messages)
+    tools_prompt = _build_tools_prompt(request.tools) if request.tools else ""
 
-    if request.tools:
-        tools_prompt = _build_tools_prompt(request.tools)
-        if tools_prompt:
-            conversation_parts.append(tools_prompt)
-
-    for msg in request.messages:
-        role = msg.get("role", "user")
-        content = msg.get("content") or ""
-
-        if role == "system":
-            conversation_parts.append(f"System: {content}")
-        elif role == "user":
-            conversation_parts.append(f"User: {content}")
-        elif role == "assistant":
-            tool_calls = msg.get("tool_calls")
-            if tool_calls:
-                for tc in tool_calls:
-                    fn = tc.get("function", {})
-                    conversation_parts.append(
-                        f"Assistant called tool {fn.get('name')}: {fn.get('arguments', '')}"
-                    )
-            elif content:
-                conversation_parts.append(f"Assistant: {content}")
-        elif role == "tool":
-            tool_call_id = msg.get("tool_call_id", "")
-            conversation_parts.append(f"Tool result [{tool_call_id}]: {content}")
-
-    if not conversation_parts:
-        raise HTTPException(status_code=400, detail="No valid messages found.")
-
-    final_prompt = "\n\n".join(conversation_parts)
+    existing_chat: Optional[_ConversationSession] = None
+    if key and session_manager:
+        candidate = _chat_sessions.get(key)
+        if candidate and msg_count > candidate.last_input_count:
+            existing_chat = candidate
 
     try:
-        response = await gemini_client.generate_content(message=final_prompt, model=request.model, files=None)
-        logger.debug(f"Gemini raw response: {response.text!r}")
-        tool_call = _parse_tool_call(response.text) if request.tools else None
+        response_text: str = ""
+        if existing_chat:
+            # Continuation: send only the new user message — Gemini session holds history.
+            new_messages = request.messages[existing_chat.last_input_count:]
+            last_user = next(
+                (msg.get("content", "") for msg in reversed(new_messages) if msg.get("role") == "user"),
+                None,
+            )
+            prompt = last_user or ""
+            if tools_prompt and prompt:
+                prompt = f"{tools_prompt}\n\n{prompt}"
+            if prompt:
+                logger.info(
+                    f"chat_completions: continuing session {existing_chat.gemini_session_id[:8]} "
+                    f"({existing_chat.last_input_count}→{msg_count} msgs)"
+                )
+                response = await session_manager.get_response(request.model, prompt, session_id=existing_chat.gemini_session_id)
+                response_text = response.text
+                existing_chat.last_input_count = msg_count
+
+        if not response_text:
+            # Fresh start: build full prompt and open a new Gemini session.
+            conversation_parts = []
+            if tools_prompt:
+                conversation_parts.append(tools_prompt)
+            for msg in request.messages:
+                role = msg.get("role", "user")
+                content = msg.get("content") or ""
+                if role == "system":
+                    conversation_parts.append(f"System: {content}")
+                elif role == "user":
+                    conversation_parts.append(f"User: {content}")
+                elif role == "assistant":
+                    tool_calls = msg.get("tool_calls")
+                    if tool_calls:
+                        for tc in tool_calls:
+                            fn = tc.get("function", {})
+                            conversation_parts.append(
+                                f"Assistant called tool {fn.get('name')}: {fn.get('arguments', '')}"
+                            )
+                    elif content:
+                        conversation_parts.append(f"Assistant: {content}")
+                elif role == "tool":
+                    tool_call_id = msg.get("tool_call_id", "")
+                    conversation_parts.append(f"Tool result [{tool_call_id}]: {content}")
+
+            if not conversation_parts:
+                raise HTTPException(status_code=400, detail="No valid messages found.")
+
+            final_prompt = "\n\n".join(conversation_parts)
+            session_id = uuid.uuid4().hex
+
+            if session_manager and key:
+                logger.info(f"chat_completions: starting new session {session_id[:8]} (key={key})")
+                response = await session_manager.get_response(request.model, final_prompt, session_id=session_id)
+                response_text = response.text
+                _chat_sessions[key] = _ConversationSession(gemini_session_id=session_id, last_input_count=msg_count)
+            else:
+                response = await gemini_client.generate_content(message=final_prompt, model=request.model, files=None)
+                response_text = response.text
+
+        logger.debug(f"Gemini raw response: {response_text!r}")
+        tool_call = _parse_tool_call(response_text) if request.tools else None
         logger.debug(f"Parsed tool_call: {tool_call}")
         if is_stream:
             chat_id = f"chatcmpl-{int(time.time())}"
-            return StreamingResponse(_sse_chat_generator(chat_id, request.model, response.text, tool_call), media_type="text/event-stream")
-        return convert_to_openai_format(response.text, request.model, is_stream, tool_call)
+            return StreamingResponse(_sse_chat_generator(chat_id, request.model, response_text, tool_call), media_type="text/event-stream")
+        return convert_to_openai_format(response_text, request.model, is_stream, tool_call)
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"Error in /v1/chat/completions endpoint: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=f"Error processing chat completion: {str(e)}")
@@ -283,6 +323,9 @@ class _ConversationSession:
 # Allows turns from the same opencode session to reuse one Gemini chat even
 # when the client never sends previous_response_id.
 _conversation_sessions: Dict[str, _ConversationSession] = {}
+
+# Same fingerprint scheme for /v1/chat/completions clients (e.g. pi).
+_chat_sessions: Dict[str, _ConversationSession] = {}
 
 # Maps response_id → session key, for clients that do send previous_response_id.
 _responses_session_map: Dict[str, str] = {}
