@@ -3,6 +3,9 @@ from fastapi import FastAPI
 from contextlib import asynccontextmanager
 from fastapi.middleware.cors import CORSMiddleware
 
+from app.utils.patches import apply_all as _apply_patches
+_apply_patches()
+
 from app.services.gemini_client import get_gemini_client, init_gemini_client, GeminiClientNotInitializedError
 from app.services.session_manager import init_session_managers
 from app.logger import logger
