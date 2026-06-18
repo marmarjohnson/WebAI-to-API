@@ -9,13 +9,13 @@ class GeminiModels(str, Enum):
     """
 
     PRO = "gemini-3.1-pro"
-    FLASH = "gemini-3.0-flash"
-    FLASH_THINKING = "gemini-3.0-flash-thinking"
+    FLASH = "gemini-3.5-flash"
+    FLASH_LITE = "gemini-3.1-flash-lite"
 
 
 class GeminiRequest(BaseModel):
     message: str
-    model: str = Field(default="gemini-3.0-flash", description="Model to use for Gemini.")
+    model: str = Field(default="gemini-3.5-flash", description="Model to use for Gemini.")
     files: Optional[List[str]] = []
 
 class OpenAIChatRequest(BaseModel):

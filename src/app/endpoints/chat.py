@@ -146,21 +146,76 @@ def convert_to_openai_format(response_text: str, model: str, stream: bool = Fals
 
 @router.get("/v1/models")
 async def list_models():
-    from gemini_webapi.constants import Model
+    from gemini_webapi.constants import GRPC, Model
+    from gemini_webapi.types import RPCData
+    from gemini_webapi.utils import extract_json_from_response, get_nested_value
+    import orjson as _json
+
     ts = int(time.time())
-    return {
-        "object": "list",
-        "data": [
-            {
-                "id": model.model_name,
-                "object": "model",
-                "created": ts,
-                "owned_by": "google",
-            }
-            for model in Model
-            if model != Model.UNSPECIFIED
-        ],
-    }
+
+    def _static_list():
+        return {
+            "object": "list",
+            "data": [
+                {"id": m.model_name, "object": "model", "created": ts, "owned_by": "google"}
+                for m in Model
+                if m != Model.UNSPECIFIED
+            ],
+        }
+
+    # Build hex-ID → Model mapping from our hardcoded enum
+    hex_to_model: dict = {}
+    for m in Model:
+        if m == Model.UNSPECIFIED:
+            continue
+        header_str = m.model_header.get("x-goog-ext-525001261-jspb", "")
+        try:
+            parsed = _json.loads(header_str)
+            hex_id = parsed[4] if len(parsed) > 4 else None
+            if hex_id:
+                hex_to_model[hex_id] = m
+        except Exception:
+            pass
+
+    try:
+        gemini_client = get_gemini_client()
+        response = await gemini_client.client._batch_execute(
+            [RPCData(rpcid=GRPC.LIST_MODELS, payload="[]")]
+        )
+        response_json = extract_json_from_response(response.text)
+
+        live_hex_ids: set = set()
+        for part in response_json:
+            part_body_str = get_nested_value(part, [2])
+            if not part_body_str:
+                continue
+            part_body = _json.loads(part_body_str)
+            models_list = get_nested_value(part_body, [15])
+            if isinstance(models_list, list):
+                for model_data in models_list:
+                    hex_id = get_nested_value(model_data, [0], "")
+                    if hex_id:
+                        live_hex_ids.add(hex_id)
+
+        if live_hex_ids:
+            matched = [hex_to_model[h] for h in live_hex_ids if h in hex_to_model]
+            if matched:
+                logger.info(f"Live model fetch returned {len(matched)} model(s): {[m.model_name for m in matched]}")
+                return {
+                    "object": "list",
+                    "data": [
+                        {"id": m.model_name, "object": "model", "created": ts, "owned_by": "google"}
+                        for m in matched
+                    ],
+                }
+
+        logger.warning("Live model fetch returned no recognisable models, falling back to static list")
+    except GeminiClientNotInitializedError:
+        pass
+    except Exception as e:
+        logger.warning(f"Live model fetch failed ({e}), falling back to static list")
+
+    return _static_list()
 
 
 @router.post("/v1/chat/completions")
