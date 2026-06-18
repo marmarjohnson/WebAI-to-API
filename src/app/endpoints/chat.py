@@ -297,9 +297,14 @@ async def chat_completions(request: OpenAIChatRequest):
                     f"chat_completions: continuing session {existing_chat.gemini_session_id[:8]} "
                     f"({existing_chat.last_input_count}→{msg_count} msgs)"
                 )
-                response = await session_manager.get_response(request.model, prompt, session_id=existing_chat.gemini_session_id)
-                response_text = response.text
-                existing_chat.last_input_count = msg_count
+                try:
+                    response = await session_manager.get_response(request.model, prompt, session_id=existing_chat.gemini_session_id)
+                    response_text = response.text
+                    existing_chat.last_input_count = msg_count
+                except Exception as e:
+                    logger.warning(f"chat_completions: session {existing_chat.gemini_session_id[:8]} continuation failed ({e}), retrying as fresh session")
+                    if key:
+                        _chat_sessions.pop(key, None)
 
         if not response_text:
             # Fresh start: build full prompt and open a new Gemini session.
@@ -612,9 +617,14 @@ async def responses_api(request: OpenAIResponsesRequest):
                     f"Responses API: continuing session {gemini_session_id[:8]} "
                     f"({existing.last_input_count}→{new_input_count} msgs)"
                 )
-                response = await session_manager.get_response(request.model, prompt, session_id=gemini_session_id)
-                response_text = response.text
-                existing.last_input_count = new_input_count
+                try:
+                    response = await session_manager.get_response(request.model, prompt, session_id=gemini_session_id)
+                    response_text = response.text
+                    existing.last_input_count = new_input_count
+                except Exception as e:
+                    logger.warning(f"Responses API: session {gemini_session_id[:8]} continuation failed ({e}), retrying as fresh session")
+                    if key:
+                        _conversation_sessions.pop(key, None)
 
         if not response_text:
             # New session: send full context.
