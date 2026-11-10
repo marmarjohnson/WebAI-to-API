@@ -8,14 +8,14 @@ class GeminiModels(str, Enum):
     An enumeration of the available Gemini models.
     """
 
-    PRO = "gemini-3.1-pro"
-    FLASH = "gemini-3.5-flash"
-    FLASH_LITE = "gemini-3.1-flash-lite"
+    PRO = "gemini-pro"
+    FLASH = "gemini-flash"
+    FLASH_LITE = "gemini-flash-lite"
 
 
 class GeminiRequest(BaseModel):
     message: str
-    model: str = Field(default="gemini-3.5-flash", description="Model to use for Gemini.")
+    model: str = Field(default="gemini-flash", description="Model to use for Gemini.")
     files: Optional[List[str]] = []
 
 class OpenAIChatRequest(BaseModel):

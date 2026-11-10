@@ -37,8 +37,10 @@ elif [[ "$1" == "--stop" ]]; then
     else
         echo "--> WebAI-to-API is not running (no PID file found)."
     fi
-    # Kill any stale processes that may still hold the port
-    pkill -f "python src/run.py" 2>/dev/null && echo "--> Cleaned up stale processes."
+    # Kill any stale processes that may still hold the port. Python 3.14 defaults to the
+    # forkserver start method, whose workers ("python -c ... forkserver ... src/run.py")
+    # outlive the parent PID tracked above.
+    pkill -f "python.*src/run\.py" 2>/dev/null && echo "--> Cleaned up stale processes."
     exit 0
 fi
 

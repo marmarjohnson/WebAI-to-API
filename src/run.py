@@ -36,7 +36,8 @@ try:
     from g4f.api import run_api as run_g4f_api
 
     G4F_AVAILABLE = True
-except ImportError:
+except Exception as e:  # broken transitive deps (e.g. nodriver SyntaxError) must not kill WebAI mode
+    print(f"g4f unavailable: {type(e).__name__}: {e}", file=sys.stderr)
     G4F_AVAILABLE = False
 
 

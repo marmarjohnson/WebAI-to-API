@@ -65,11 +65,20 @@ class CrossPlatformCookieExtractor:
             profiles_dir = os.path.join(home, 'AppData', 'Roaming', 'Mozilla', 'Firefox', 'Profiles')
             if not os.path.isdir(profiles_dir):
                 continue
-            # Prefer the profile marked Default=1 in profiles.ini
             ini_path = os.path.join(os.path.dirname(profiles_dir), 'profiles.ini')
             if os.path.exists(ini_path):
                 cp = configparser.ConfigParser()
                 cp.read(ini_path)
+                # Modern Firefox launches the profile named in an [Install<hash>]
+                # section; the legacy Default=1 flag often points at a stale profile.
+                for section in cp.sections():
+                    if section.startswith('Install'):
+                        rel = cp.get(section, 'Default', fallback=None)
+                        if rel:
+                            db = os.path.join(os.path.dirname(profiles_dir), rel, 'cookies.sqlite')
+                            if os.path.exists(db):
+                                return db
+                # Then the profile marked Default=1
                 for section in cp.sections():
                     if cp.get(section, 'Default', fallback=None) == '1':
                         rel = cp.get(section, 'Path', fallback=None)
@@ -372,13 +381,9 @@ class CrossPlatformCookieExtractor:
         """Get cookies with multiple fallback methods"""
         logger.info(f"Attempting to get cookies from {browser_name} with fallback methods")
 
-        # Method 1: Try browser_cookie3 first (works well on native Linux)
-        cookies = self._try_browser_cookie3(browser_name)
-        if cookies:
-            logger.info(f"Successfully retrieved cookies using browser_cookie3 for {browser_name}")
-            return cookies
-
-        # Method 2: WSL — read directly from Windows Firefox profile
+        # Method 1 (WSL): read the Windows Firefox profile first — that is the
+        # browser the user actually logs in with. browser_cookie3 would otherwise
+        # find the Linux (snap) Firefox profile and "succeed" without Google cookies.
         if self.is_wsl and browser_name == "firefox":
             logger.info("WSL detected: trying Windows Firefox profile")
             db_path = self._get_wsl_firefox_profile()
@@ -390,6 +395,12 @@ class CrossPlatformCookieExtractor:
                     return cookies
             else:
                 logger.warning("Could not locate Windows Firefox profile from WSL")
+
+        # Method 2: browser_cookie3 (works well on native Linux/macOS)
+        cookies = self._try_browser_cookie3(browser_name)
+        if cookies:
+            logger.info(f"Successfully retrieved cookies using browser_cookie3 for {browser_name}")
+            return cookies
 
         # Method 3: Try direct database access (fallback for Windows)
         if self.is_windows:

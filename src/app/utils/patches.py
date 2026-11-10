@@ -8,7 +8,9 @@ logger = logging.getLogger(__name__)
 
 
 def apply_all() -> None:
-    _patch_httpx_cookie_conflict()
+    # gemini-webapi >= 2.0 uses curl_cffi instead of httpx, so the httpx
+    # CookieConflict patch below no longer applies. Kept for reference only.
+    pass
 
 
 def _patch_httpx_cookie_conflict() -> None:

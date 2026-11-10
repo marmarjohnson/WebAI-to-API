@@ -18,11 +18,18 @@ default_ai = gemini
 
 # --- Gemini Model Configuration ---
 # Choose the model to be used when Gemini is selected as the AI.
-# Available models:
-# - gemini-3.0-flash
-# - gemini-3.0-flash-thinking
-# - gemini-3.1-pro
-default_model_gemini = gemini-3.0-flash
+# Models are discovered from your Gemini account at startup. Any name works:
+# Gemini aliases (e.g. gemini-3.1-pro, 3.6 flash) or a family name:
+# - gemini-pro         (requires a paid tier)
+# - gemini-flash
+# - gemini-flash-lite
+# - default            (whatever Gemini picks for the account)
+default_model_gemini = gemini-flash
+
+# Max seconds for one model attempt before falling back to a lower tier
+# (Pro -> Flash -> Flash-Lite). Models the account can no longer use (e.g. after
+# a subscription lapses) are detected from the account and downgraded automatically.
+request_timeout = 180
 
 # --- Gemini Cookies ---
 # Provide your authentication cookies for Gemini here.
